@@ -67,7 +67,7 @@ def create_basic_agent(user_id: str, session_id: str) -> Agent:
     When asked about your tools, list them and explain what they do."""
 
     bedrock_model = BedrockModel(
-        model_id="us.anthropic.claude-sonnet-4-5-20250929-v1:0", temperature=0.1
+        model_id="jp.anthropic.claude-haiku-4-5-20251001-v1:0", temperature=0.1
     )
 
     memory_id = os.environ.get("MEMORY_ID")

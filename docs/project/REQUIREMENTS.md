@@ -52,12 +52,12 @@ AgentCore Runtime（Strandsエージェント） ← FASTデフォルト
 
 ### FASTから変更・追加する箇所
 
-| ファイル／リソース                             | 変更内容                                                  |
-| ---------------------------------------------- | --------------------------------------------------------- |
-| `gateway/tools/`                               | 抽出結果参照ツール3本を新規追加                           |
-| `infra-cdk/lib/backend-stack.ts`               | Lambdaツール・EventBridge・抽出バッチLambdaを追加         |
-| `patterns/strands-single-agent/basic_agent.py` | システムプロンプトを日記インサイトエージェント向けに更新  |
-| `infra-cdk/config.yaml`                        | admin_user_emailをnullに設定（config.yaml.exampleを用意） |
+| ファイル／リソース                             | 変更内容                                                 |
+| ---------------------------------------------- | -------------------------------------------------------- |
+| `gateway/tools/`                               | 抽出結果参照ツール3本を新規追加                          |
+| `infra-cdk/lib/backend-stack.ts`               | Lambdaツール・EventBridge・抽出バッチLambdaを追加        |
+| `patterns/strands-single-agent/basic_agent.py` | システムプロンプトを日記インサイトエージェント向けに更新 |
+| `infra-cdk/config.yaml`                        | stack名を変更/admin_user_emailを`null`に変更             |
 
 ---
 
