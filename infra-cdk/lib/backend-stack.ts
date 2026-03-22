@@ -117,6 +117,7 @@ export class BackendStack extends cdk.NestedStack {
     // Create the agent runtime artifact based on deployment type
     let agentRuntimeArtifact: agentcore.AgentRuntimeArtifact
     let zipPackagerResource: cdk.CustomResource | undefined
+    let contentHash = ""  // For tracking code changes and triggering Runtime updates
 
     if (deploymentType === "zip") {
       // ZIP DEPLOYMENT: Use Lambda to package and upload to S3 (no Docker required)
@@ -146,20 +147,29 @@ export class BackendStack extends cdk.NestedStack {
       // Read agent code files and encode as base64
       const agentCode: Record<string, string> = {}
       
-      // Read pattern .py files
-      for (const file of fs.readdirSync(patternDir)) {
-        if (file.endsWith(".py")) {
-          const content = fs.readFileSync(path.join(patternDir, file))
-          agentCode[file] = content.toString("base64")
+      // Read pattern .py files and subdirectories
+      for (const file of fs.readdirSync(patternDir, { withFileTypes: true })) {
+        if (file.isFile() && file.name.endsWith(".py")) {
+          const content = fs.readFileSync(path.join(patternDir, file.name))
+          agentCode[file.name] = content.toString("base64")
+        } else if (file.isDirectory() && file.name !== "__pycache__") {
+          // Include subdirectories (tools/, etc.)
+          this.readDirRecursive(path.join(patternDir, file.name), file.name, agentCode)
         }
       }
 
-      // Read shared modules (gateway/, tools/)
+      // Read shared modules (gateway/, tools/, patterns/utils/)
       for (const module of ["gateway", "tools"]) {
         const moduleDir = path.join(repoRoot, module)
         if (fs.existsSync(moduleDir)) {
           this.readDirRecursive(moduleDir, module, agentCode)
         }
+      }
+
+      // Read patterns/utils/ for shared utilities (auth, ssm, etc.)
+      const patternsUtilsDir = path.join(repoRoot, "patterns", "utils")
+      if (fs.existsSync(patternsUtilsDir)) {
+        this.readDirRecursive(patternsUtilsDir, "utils", agentCode)
       }
 
       // Read requirements
@@ -171,7 +181,7 @@ export class BackendStack extends cdk.NestedStack {
 
       // Create hash for change detection
       // We use this to trigger update when content changes
-      const contentHash = this.hashContent(JSON.stringify({ requirements, agentCode }))
+      contentHash = this.hashContent(JSON.stringify({ requirements, agentCode }))
 
       // Custom Resource to trigger packaging
       const provider = new cr.Provider(this, "ZipPackagerProvider", {
@@ -206,10 +216,11 @@ export class BackendStack extends cdk.NestedStack {
       )
     } else {
       // DOCKER DEPLOYMENT: Use container-based deployment
+      contentHash = "docker-mode"  // Docker images have their own versioning
       agentRuntimeArtifact = agentcore.AgentRuntimeArtifact.fromAsset(
         path.resolve(__dirname, "..", ".."),
         {
-          platform: ecr_assets.Platform.LINUX_ARM64,
+          platform: ecr_assets.Platform.LINUX_AMD64,
           file: `patterns/${pattern}/Dockerfile`,
         }
       )
@@ -299,6 +310,7 @@ export class BackendStack extends cdk.NestedStack {
       AWS_DEFAULT_REGION: stack.region,
       MEMORY_ID: memoryId,
       STACK_NAME: config.stack_name_base, // Required for agent to find SSM parameters
+      CODE_VERSION: contentHash, // Force Runtime update when code changes (Immutable Infrastructure pattern)
     }
 
     // Create the runtime using L2 construct
@@ -677,6 +689,156 @@ export class BackendStack extends cdk.NestedStack {
     gateway.node.addDependency(toolLambda)
     gateway.node.addDependency(this.machineClient)
     gateway.node.addDependency(gatewayRole)
+
+    // ========== Diary Insights Tools ==========
+    // S3 bucket for diary insights (references, ideas, goals)
+    const insightsBucket = new s3.Bucket(this, "DiaryInsightsBucket", {
+      bucketName: `${config.stack_name_base}-insights`,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+    })
+
+    // Lambda 1: References tool (LLM-powered search)
+    const referencesLambda = new lambda.Function(this, "ReferencesToolLambda", {
+      runtime: lambda.Runtime.PYTHON_3_13,
+      handler: "references_lambda.handler",
+      code: lambda.Code.fromAsset(path.join(__dirname, "../../gateway/tools/references")),
+      timeout: cdk.Duration.seconds(60), // Longer timeout for Bedrock calls
+      environment: {
+        S3_BUCKET_NAME: insightsBucket.bucketName,
+      },
+      logGroup: new logs.LogGroup(this, "ReferencesToolLambdaLogGroup", {
+        logGroupName: `/aws/lambda/${config.stack_name_base}-references-tool`,
+        retention: logs.RetentionDays.ONE_WEEK,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+    })
+
+    // Lambda 2: Insights tool (Ideas and Goals, shared implementation)
+    const insightsLambda = new lambda.Function(this, "InsightsToolLambda", {
+      runtime: lambda.Runtime.PYTHON_3_13,
+      handler: "insights_lambda.handler",
+      code: lambda.Code.fromAsset(path.join(__dirname, "../../gateway/tools/insights")),
+      timeout: cdk.Duration.seconds(30), // Shorter timeout for simple retrieval
+      environment: {
+        S3_BUCKET_NAME: insightsBucket.bucketName,
+      },
+      logGroup: new logs.LogGroup(this, "InsightsToolLambdaLogGroup", {
+        logGroupName: `/aws/lambda/${config.stack_name_base}-insights-tool`,
+        retention: logs.RetentionDays.ONE_WEEK,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+    })
+
+    // Grant S3 read permissions to both Lambdas
+    insightsBucket.grantRead(referencesLambda)
+    insightsBucket.grantRead(insightsLambda)
+
+    // Grant Bedrock permissions to references Lambda (for LLM file selection with structured output)
+    referencesLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["bedrock:InvokeModel"],
+        resources: [
+          `arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0`,
+        ],
+      })
+    )
+
+    // Grant Gateway role permission to invoke both Lambdas
+    referencesLambda.grantInvoke(gatewayRole)
+    insightsLambda.grantInvoke(gatewayRole)
+
+    // Load tool specifications
+    const referencesToolSpecPath = path.join(
+      __dirname,
+      "../../gateway/tools/references/tool_spec.json"
+    )
+    const referencesApiSpec = JSON.parse(fs.readFileSync(referencesToolSpecPath, "utf8"))
+
+    const insightsToolSpecPath = path.join(__dirname, "../../gateway/tools/insights/tool_spec.json")
+    const insightsApiSpec = JSON.parse(fs.readFileSync(insightsToolSpecPath, "utf8"))
+
+    // Gateway Target 1: get_references
+    const referencesGatewayTarget = new bedrockagentcore.CfnGatewayTarget(
+      this,
+      "ReferencesGatewayTarget",
+      {
+        gatewayIdentifier: gateway.attrGatewayIdentifier,
+        name: "get-references-target",
+        description: "References search tool with LLM-powered file selection",
+        targetConfiguration: {
+          mcp: {
+            lambda: {
+              lambdaArn: referencesLambda.functionArn,
+              toolSchema: {
+                inlinePayload: referencesApiSpec,
+              },
+            },
+          },
+        },
+        credentialProviderConfigurations: [
+          {
+            credentialProviderType: "GATEWAY_IAM_ROLE",
+          },
+        ],
+      }
+    )
+    referencesGatewayTarget.addDependency(gateway)
+    gateway.node.addDependency(referencesLambda)
+
+    // Gateway Target 2 & 3: get_ideas and get_goals (shared Lambda)
+    const ideasGatewayTarget = new bedrockagentcore.CfnGatewayTarget(this, "IdeasGatewayTarget", {
+      gatewayIdentifier: gateway.attrGatewayIdentifier,
+      name: "get-ideas-target",
+      description: "Ideas and TODOs retrieval tool",
+      targetConfiguration: {
+        mcp: {
+          lambda: {
+            lambdaArn: insightsLambda.functionArn,
+            toolSchema: {
+              inlinePayload: insightsApiSpec,
+            },
+          },
+        },
+      },
+      credentialProviderConfigurations: [
+        {
+          credentialProviderType: "GATEWAY_IAM_ROLE",
+        },
+      ],
+    })
+    ideasGatewayTarget.addDependency(gateway)
+
+    const goalsGatewayTarget = new bedrockagentcore.CfnGatewayTarget(this, "GoalsGatewayTarget", {
+      gatewayIdentifier: gateway.attrGatewayIdentifier,
+      name: "get-goals-target",
+      description: "Long-term goals retrieval tool",
+      targetConfiguration: {
+        mcp: {
+          lambda: {
+            lambdaArn: insightsLambda.functionArn,
+            toolSchema: {
+              inlinePayload: insightsApiSpec,
+            },
+          },
+        },
+      },
+      credentialProviderConfigurations: [
+        {
+          credentialProviderType: "GATEWAY_IAM_ROLE",
+        },
+      ],
+    })
+    goalsGatewayTarget.addDependency(gateway)
+    gateway.node.addDependency(insightsLambda)
+
+    // Output S3 bucket name
+    new cdk.CfnOutput(this, "InsightsBucketName", {
+      value: insightsBucket.bucketName,
+      description: "S3 bucket for diary insights storage",
+    })
 
     // Store Gateway URL in SSM for runtime access
     new ssm.StringParameter(this, "GatewayUrlParam", {
