@@ -34,6 +34,7 @@ export class BackendStack extends cdk.NestedStack {
   public feedbackApiUrl: string
   public runtimeArn: string
   public memoryArn: string
+  public insightsBucket: s3.IBucket // Phase 3: extraction-stackで使用
   private agentName: cdk.CfnParameter
   private networkMode: cdk.CfnParameter
   private userPool: cognito.IUserPool
@@ -692,7 +693,7 @@ export class BackendStack extends cdk.NestedStack {
 
     // ========== Diary Insights Tools ==========
     // S3 bucket for diary insights (references, ideas, goals)
-    const insightsBucket = new s3.Bucket(this, "DiaryInsightsBucket", {
+    this.insightsBucket = new s3.Bucket(this, "DiaryInsightsBucket", {
       bucketName: `${config.stack_name_base}-insights`,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
@@ -706,7 +707,7 @@ export class BackendStack extends cdk.NestedStack {
       code: lambda.Code.fromAsset(path.join(__dirname, "../../gateway/tools/references")),
       timeout: cdk.Duration.seconds(60), // Longer timeout for Bedrock calls
       environment: {
-        S3_BUCKET_NAME: insightsBucket.bucketName,
+        S3_BUCKET_NAME: this.insightsBucket.bucketName,
       },
       logGroup: new logs.LogGroup(this, "ReferencesToolLambdaLogGroup", {
         logGroupName: `/aws/lambda/${config.stack_name_base}-references-tool`,
@@ -722,7 +723,7 @@ export class BackendStack extends cdk.NestedStack {
       code: lambda.Code.fromAsset(path.join(__dirname, "../../gateway/tools/insights")),
       timeout: cdk.Duration.seconds(30), // Shorter timeout for simple retrieval
       environment: {
-        S3_BUCKET_NAME: insightsBucket.bucketName,
+        S3_BUCKET_NAME: this.insightsBucket.bucketName,
       },
       logGroup: new logs.LogGroup(this, "InsightsToolLambdaLogGroup", {
         logGroupName: `/aws/lambda/${config.stack_name_base}-insights-tool`,
@@ -732,8 +733,8 @@ export class BackendStack extends cdk.NestedStack {
     })
 
     // Grant S3 read permissions to both Lambdas
-    insightsBucket.grantRead(referencesLambda)
-    insightsBucket.grantRead(insightsLambda)
+    this.insightsBucket.grantRead(referencesLambda)
+    this.insightsBucket.grantRead(insightsLambda)
 
     // Grant Bedrock permissions to references Lambda (for LLM file selection with structured output)
     referencesLambda.addToRolePolicy(
@@ -836,7 +837,7 @@ export class BackendStack extends cdk.NestedStack {
 
     // Output S3 bucket name
     new cdk.CfnOutput(this, "InsightsBucketName", {
-      value: insightsBucket.bucketName,
+      value: this.insightsBucket.bucketName,
       description: "S3 bucket for diary insights storage",
     })
 

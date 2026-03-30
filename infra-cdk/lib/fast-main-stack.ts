@@ -6,6 +6,7 @@ import { AppConfig } from "./utils/config-manager"
 import { BackendStack } from "./backend-stack"
 import { AmplifyHostingStack } from "./amplify-hosting-stack"
 import { CognitoStack } from "./cognito-stack"
+import { ExtractionStack } from "./extraction-stack"
 
 export interface FastAmplifyStackProps extends cdk.StackProps {
   config: AppConfig
@@ -15,6 +16,7 @@ export class FastMainStack extends cdk.Stack {
   public readonly amplifyHostingStack: AmplifyHostingStack
   public readonly backendStack: BackendStack
   public readonly cognitoStack: CognitoStack
+  public readonly extractionStack: ExtractionStack
 
   constructor(scope: Construct, id: string, props: FastAmplifyStackProps) {
     const description =
@@ -38,6 +40,12 @@ export class FastMainStack extends cdk.Stack {
       userPoolClientId: this.cognitoStack.userPoolClientId,
       userPoolDomain: this.cognitoStack.userPoolDomain,
       frontendUrl: this.amplifyHostingStack.amplifyUrl,
+    })
+
+    // Step 3: Create extraction stack (Phase 3: diary extraction batch)
+    this.extractionStack = new ExtractionStack(this, `${id}-extraction`, {
+      config: props.config,
+      insightsBucket: this.backendStack.insightsBucket,
     })
 
     // Outputs

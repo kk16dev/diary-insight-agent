@@ -7,3 +7,8 @@ admin_user_email: null
 backend:
   pattern: strands-single-agent # Available patterns: strands-single-agent, langgraph-single-agent
   deployment_type: zip # Available deployment types: docker (default), zip
+
+# Phase 3: GitHub configuration for diary extraction
+github:
+  owner: kk16dev # GitHub repository owner
+  repo: personal-knowledge-base # GitHub repository name (private repository)

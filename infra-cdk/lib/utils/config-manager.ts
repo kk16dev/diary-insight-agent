@@ -13,6 +13,10 @@ export interface AppConfig {
     pattern: string
     deployment_type: DeploymentType
   }
+  github?: {
+    owner: string
+    repo: string
+  }
 }
 
 export class ConfigManager {
@@ -56,6 +60,7 @@ export class ConfigManager {
           pattern: parsedConfig.backend?.pattern || "strands-single-agent",
           deployment_type: deploymentType,
         },
+        github: parsedConfig.github,
       }
     } catch (error) {
       throw new Error(`Failed to parse configuration file ${configPath}: ${error}`)
