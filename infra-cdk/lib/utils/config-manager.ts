@@ -17,6 +17,12 @@ export interface AppConfig {
     owner: string
     repo: string
   }
+  tags?: {
+    Project: string
+    Environment: string
+    ManagedBy: string
+    Owner: string
+  }
 }
 
 export class ConfigManager {
@@ -61,6 +67,7 @@ export class ConfigManager {
           deployment_type: deploymentType,
         },
         github: parsedConfig.github,
+        tags: parsedConfig.tags,
       }
     } catch (error) {
       throw new Error(`Failed to parse configuration file ${configPath}: ${error}`)
