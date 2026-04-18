@@ -1,8 +1,7 @@
 import * as cdk from "aws-cdk-lib";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as events from "aws-cdk-lib/aws-events";
-import * as targets from "aws-cdk-lib/aws-events-targets";
+import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as logs from "aws-cdk-lib/aws-logs";
 import { Construct } from "constructs";
@@ -16,11 +15,12 @@ export interface ExtractionStackProps extends cdk.NestedStackProps {
 }
 
 /**
- * Phase 3: 日記抽出バッチスタック
+ * Phase 3: 日記抽出スタック
  *
- * EventBridge + Lambdaで日記を自動抽出し、S3のdraft/に保存する
+ * GitHub Webhook + Lambdaで日記をリアルタイム抽出し、S3のdraft/に保存する
  */
 export class ExtractionStack extends cdk.NestedStack {
+  public readonly webhookUrl: string;
   constructor(scope: Construct, id: string, props: ExtractionStackProps) {
     super(scope, id, props);
 
@@ -39,7 +39,7 @@ export class ExtractionStack extends cdk.NestedStack {
       throw new Error("config.yamlにgithub.ownerとgithub.repoが必要です");
     }
 
-    // Lambda: 抽出バッチ
+    // Lambda: 日記抽出（Webhook対応）
     const extractionLambda = new PythonFunction(this, "DiaryExtractionLambda", {
       runtime: lambda.Runtime.PYTHON_3_13,
       entry: path.join(__dirname, "../../batch/extract_diary"),
@@ -49,10 +49,10 @@ export class ExtractionStack extends cdk.NestedStack {
       memorySize: 512,
       environment: {
         GITHUB_TOKEN_SECRET_NAME: `${config.stack_name_base}/github-token`,
+        GITHUB_WEBHOOK_SECRET_NAME: `${config.stack_name_base}/github-webhook-secret`,
         GITHUB_OWNER: githubOwner,
         GITHUB_REPO: githubRepo,
         S3_BUCKET_NAME: insightsBucket.bucketName,
-        LOOKBACK_DAYS: "7", // 過去7日分を遡る
       },
       logGroup: new logs.LogGroup(this, "DiaryExtractionLambdaLogGroup", {
         logGroupName: `/aws/lambda/${config.stack_name_base}-diary-extraction`,
@@ -65,13 +65,14 @@ export class ExtractionStack extends cdk.NestedStack {
     insightsBucket.grantWrite(extractionLambda, "draft/*");
     insightsBucket.grantRead(extractionLambda, "draft/*");
 
-    // IAM権限: Secrets Manager（GitHub Token読み取り）
+    // IAM権限: Secrets Manager（GitHub Token + Webhook Secret読み取り）
     extractionLambda.addToRolePolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
         actions: ["secretsmanager:GetSecretValue"],
         resources: [
           `arn:aws:secretsmanager:${this.region}:${this.account}:secret:${config.stack_name_base}/github-token-*`,
+          `arn:aws:secretsmanager:${this.region}:${this.account}:secret:${config.stack_name_base}/github-webhook-secret-*`,
         ],
       })
     );
@@ -92,20 +93,35 @@ export class ExtractionStack extends cdk.NestedStack {
       })
     );
 
-    // EventBridge Scheduler: 毎日 2:00 JST（UTC 17:00）
-    const extractionSchedule = new events.Rule(this, "DiaryExtractionSchedule", {
-      schedule: events.Schedule.cron({
-        minute: "0",
-        hour: "17", // UTC 17:00 = JST 2:00
-        day: "*",
-        month: "*",
-        year: "*",
-      }),
-      description: "Daily diary extraction batch (2:00 JST)",
+    // API Gateway: GitHub Webhook エンドポイント
+    const api = new apigateway.RestApi(this, "WebhookApi", {
+      restApiName: `${config.stack_name_base}-webhook-api`,
+      description: "GitHub Webhook receiver for diary extraction",
+      deployOptions: {
+        stageName: "prod",
+        loggingLevel: apigateway.MethodLoggingLevel.INFO,
+        dataTraceEnabled: true,
+        metricsEnabled: true,
+      },
     });
 
-    // EventBridge → Lambda
-    extractionSchedule.addTarget(new targets.LambdaFunction(extractionLambda));
+    // POST /webhook/github-diary
+    const webhookResource = api.root
+      .addResource("webhook")
+      .addResource("github-diary");
+
+    webhookResource.addMethod(
+      "POST",
+      new apigateway.LambdaIntegration(extractionLambda, {
+        proxy: true, // API Gateway から Lambda へのリクエストをそのまま渡す
+      }),
+      {
+        authorizationType: apigateway.AuthorizationType.NONE, // Lambda内で署名検証
+      }
+    );
+
+    // Webhook URL を保存
+    this.webhookUrl = `${api.url}webhook/github-diary`;
 
     // CloudFormation Outputs
     new cdk.CfnOutput(this, "ExtractionLambdaArn", {
@@ -114,10 +130,16 @@ export class ExtractionStack extends cdk.NestedStack {
       exportName: `${config.stack_name_base}-extraction-lambda-arn`,
     });
 
-    new cdk.CfnOutput(this, "ExtractionScheduleArn", {
-      value: extractionSchedule.ruleArn,
-      description: "ARN of the EventBridge schedule rule",
-      exportName: `${config.stack_name_base}-extraction-schedule-arn`,
+    new cdk.CfnOutput(this, "WebhookUrl", {
+      value: this.webhookUrl,
+      description: "GitHub Webhook URL - Configure this in GitHub repository settings",
+      exportName: `${config.stack_name_base}-webhook-url`,
+    });
+
+    new cdk.CfnOutput(this, "WebhookApiId", {
+      value: api.restApiId,
+      description: "Webhook API Gateway ID",
+      exportName: `${config.stack_name_base}-webhook-api-id`,
     });
   }
 }

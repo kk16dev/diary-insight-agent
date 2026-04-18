@@ -106,5 +106,11 @@ export class FastMainStack extends cdk.Stack {
       description: "S3 bucket for Amplify deployment staging",
       exportName: `${props.config.stack_name_base}-StagingBucket`,
     })
+
+    new cdk.CfnOutput(this, "WebhookUrl", {
+      value: this.extractionStack.webhookUrl,
+      description: "GitHub Webhook URL - Configure this in your GitHub repository settings",
+      exportName: `${props.config.stack_name_base}-WebhookUrl`,
+    })
   }
 }
