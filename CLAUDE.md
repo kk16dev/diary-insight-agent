@@ -32,6 +32,14 @@ npx cdk diff                            # 差分確認
 npx cdk destroy --all                   # 削除
 ```
 
+## 開発ワークフロー
+
+1. GitHub issueを確認/作成（既存issueがない場合）
+2. featureブランチを作成: `git checkout -b feature/issue-name`
+3. 開発・コミット
+4. PRを作成してマージ
+5. マージ後、ローカルを更新
+
 ## アーキテクチャ
 
 ### システム構成
