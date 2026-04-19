@@ -21,7 +21,7 @@ export default function ChatPage() {
 
   return (
     <GlobalContextProvider>
-      <div className="relative h-screen">
+      <div className="relative h-full">
         <ChatInterface />
       </div>
     </GlobalContextProvider>

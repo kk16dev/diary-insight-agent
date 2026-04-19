@@ -508,7 +508,7 @@ export class BackendStack extends cdk.NestedStack {
       description: "API for user feedback and future endpoints",
       defaultCorsPreflightOptions: {
         allowOrigins: [frontendUrl, "http://localhost:3000"],
-        allowMethods: ["POST", "OPTIONS"],
+        allowMethods: ["GET", "POST", "OPTIONS"],
         allowHeaders: ["Content-Type", "Authorization"],
       },
       deployOptions: {
@@ -563,6 +563,62 @@ export class BackendStack extends cdk.NestedStack {
       parameterName: `/${config.stack_name_base}/feedback-api-url`,
       stringValue: api.url,
       description: "Feedback API Gateway URL",
+    })
+
+    // Add Drafts API endpoints to the same API Gateway
+    this.createDraftsApiEndpoints(config, frontendUrl, api, authorizer)
+  }
+
+  private createDraftsApiEndpoints(
+    config: AppConfig,
+    frontendUrl: string,
+    api: apigateway.RestApi,
+    authorizer: apigateway.CognitoUserPoolsAuthorizer
+  ): void {
+    // Create Drafts Lambda function
+    const draftsLambda = new PythonFunction(this, "DraftsLambda", {
+      functionName: `${config.stack_name_base}-drafts`,
+      runtime: lambda.Runtime.PYTHON_3_13,
+      entry: path.join(__dirname, "..", "lambdas", "drafts"),
+      handler: "handler",
+      environment: {
+        S3_BUCKET_NAME: this.insightsBucket.bucketName,
+        CORS_ALLOWED_ORIGINS: `${frontendUrl},http://localhost:3000`,
+      },
+      timeout: cdk.Duration.seconds(30),
+      layers: [
+        lambda.LayerVersion.fromLayerVersionArn(
+          this,
+          "DraftsPowertoolsLayer",
+          `arn:aws:lambda:${
+            cdk.Stack.of(this).region
+          }:017000801446:layer:AWSLambdaPowertoolsPythonV3-python313-arm64:18`
+        ),
+      ],
+      logGroup: new logs.LogGroup(this, "DraftsLambdaLogGroup", {
+        logGroupName: `/aws/lambda/${config.stack_name_base}-drafts`,
+        retention: logs.RetentionDays.ONE_WEEK,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+    })
+
+    // Grant S3 read permissions for draft/ prefix
+    this.insightsBucket.grantRead(draftsLambda)
+
+    // Create /drafts resource
+    const draftsResource = api.root.addResource("drafts")
+
+    // GET /drafts - List all drafts
+    draftsResource.addMethod("GET", new apigateway.LambdaIntegration(draftsLambda), {
+      authorizer,
+      authorizationType: apigateway.AuthorizationType.COGNITO,
+    })
+
+    // GET /drafts/{date} - Get draft detail
+    const draftDetailResource = draftsResource.addResource("{date}")
+    draftDetailResource.addMethod("GET", new apigateway.LambdaIntegration(draftsLambda), {
+      authorizer,
+      authorizationType: apigateway.AuthorizationType.COGNITO,
     })
   }
 
