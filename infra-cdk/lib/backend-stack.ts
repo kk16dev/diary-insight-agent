@@ -756,24 +756,7 @@ export class BackendStack extends cdk.NestedStack {
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
     })
 
-    // Lambda 1: References tool (LLM-powered search)
-    const referencesLambda = new PythonFunction(this, "ReferencesToolLambda", {
-      runtime: lambda.Runtime.PYTHON_3_13,
-      entry: path.join(__dirname, "../../gateway/tools/references"),
-      index: "references_lambda.py",
-      handler: "handler",
-      timeout: cdk.Duration.seconds(60), // Longer timeout for Bedrock calls
-      environment: {
-        S3_BUCKET_NAME: this.insightsBucket.bucketName,
-      },
-      logGroup: new logs.LogGroup(this, "ReferencesToolLambdaLogGroup", {
-        logGroupName: `/aws/lambda/${config.stack_name_base}-references-tool`,
-        retention: logs.RetentionDays.ONE_WEEK,
-        removalPolicy: cdk.RemovalPolicy.DESTROY,
-      }),
-    })
-
-    // Lambda 2: Insights tool (Ideas and Goals, shared implementation)
+    // Lambda: Insights tool (References, Ideas, and Goals)
     const insightsLambda = new lambda.Function(this, "InsightsToolLambda", {
       runtime: lambda.Runtime.PYTHON_3_13,
       handler: "insights_lambda.handler",
@@ -789,33 +772,13 @@ export class BackendStack extends cdk.NestedStack {
       }),
     })
 
-    // Grant S3 read permissions to both Lambdas
-    this.insightsBucket.grantRead(referencesLambda)
+    // Grant S3 read permissions
     this.insightsBucket.grantRead(insightsLambda)
 
-    // Grant Bedrock permissions to references Lambda (for LLM file selection with structured output)
-    referencesLambda.addToRolePolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: ["bedrock:InvokeModel"],
-        resources: [
-          `arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0`,
-          `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/jp.anthropic.claude-haiku-4-5-20251001-v1:0`,
-        ],
-      })
-    )
-
-    // Grant Gateway role permission to invoke both Lambdas
-    referencesLambda.grantInvoke(gatewayRole)
+    // Grant Gateway role permission to invoke Lambda
     insightsLambda.grantInvoke(gatewayRole)
 
     // Load tool specifications
-    const referencesToolSpecPath = path.join(
-      __dirname,
-      "../../gateway/tools/references/tool_spec.json"
-    )
-    const referencesApiSpec = JSON.parse(fs.readFileSync(referencesToolSpecPath, "utf8"))
-
     const insightsToolSpecPath = path.join(__dirname, "../../gateway/tools/insights/tool_spec.json")
     const insightsApiSpec = JSON.parse(fs.readFileSync(insightsToolSpecPath, "utf8"))
 
@@ -826,13 +789,13 @@ export class BackendStack extends cdk.NestedStack {
       {
         gatewayIdentifier: gateway.attrGatewayIdentifier,
         name: "get-references-target",
-        description: "References search tool with LLM-powered file selection",
+        description: "References retrieval tool",
         targetConfiguration: {
           mcp: {
             lambda: {
-              lambdaArn: referencesLambda.functionArn,
+              lambdaArn: insightsLambda.functionArn,
               toolSchema: {
-                inlinePayload: referencesApiSpec,
+                inlinePayload: insightsApiSpec,
               },
             },
           },
@@ -845,7 +808,6 @@ export class BackendStack extends cdk.NestedStack {
       }
     )
     referencesGatewayTarget.addDependency(gateway)
-    gateway.node.addDependency(referencesLambda)
 
     // Gateway Target 2 & 3: get_ideas and get_goals (shared Lambda)
     const ideasGatewayTarget = new bedrockagentcore.CfnGatewayTarget(this, "IdeasGatewayTarget", {
