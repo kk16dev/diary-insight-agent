@@ -19,7 +19,7 @@ def filter_by_date(
     日付プレフィックス（YYYY-MM-DD）でS3ファイルキーをフィルタリング
 
     Args:
-        file_keys: S3オブジェクトキーのリスト（例: "ideas/2026-02-10-ideas.md"）
+        file_keys: S3オブジェクトキーのリスト（例: "draft/2026-02-10/ideas.md"）
         date_from: 開始日（YYYY-MM-DD形式、この日を含む）
         date_to: 終了日（YYYY-MM-DD形式、この日を含む）
 
@@ -31,13 +31,16 @@ def filter_by_date(
 
     filtered = []
     for key in file_keys:
-        # ファイル名から日付を抽出: "ideas/YYYY-MM-DD-ideas.md"
-        filename = key.split("/")[-1]
-        if not filename or len(filename) < 10:
+        # パスの2番目のセグメントから日付を抽出: "draft/YYYY-MM-DD/ideas.md"
+        parts = key.split("/")
+        if len(parts) < 3:
+            continue
+        date_segment = parts[1]
+        if len(date_segment) < 10:
             continue
 
         try:
-            file_date = filename[:10]  # "YYYY-MM-DD"を抽出
+            file_date = date_segment  # "YYYY-MM-DD"を抽出
             datetime.strptime(file_date, "%Y-%m-%d")  # フォーマット検証
 
             # 日付フィルタを適用
@@ -49,7 +52,7 @@ def filter_by_date(
             filtered.append(key)
         except ValueError:
             # 無効な日付形式のファイルはスキップ
-            logger.warning(f"Skipping file with invalid date format: {filename}")
+            logger.warning(f"Skipping file with invalid date format: {key}")
             continue
 
     return filtered
@@ -115,12 +118,12 @@ def handler(event, context):
 
         logger.info(f"Processing tool: {tool_name}")
 
-        # ツール名に基づきS3プレフィックスを決定
+        # ツール名に基づきファイルサフィックスを決定
         if tool_name == "get_ideas":
-            prefix = "ideas/"
+            file_suffix = "/ideas.md"
             content_type = "アイデア・TODO"
         elif tool_name == "get_goals":
-            prefix = "goals/"
+            file_suffix = "/goals.md"
             content_type = "中長期目標"
         else:
             logger.error(f"Unexpected tool name: {tool_name}")
@@ -133,13 +136,13 @@ def handler(event, context):
         date_to = event.get("date_to")
 
         # S3からファイル一覧を取得
-        logger.info(f"Listing files from s3://{bucket_name}/{prefix}")
-        response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix=prefix)
+        logger.info(f"Listing files from s3://{bucket_name}/draft/")
+        response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix="draft/")
 
         if "Contents" not in response:
             return {"content": [{"type": "text", "text": f"{content_type}ファイルが見つかりませんでした。"}]}
 
-        file_keys = [obj["Key"] for obj in response["Contents"] if obj["Key"].endswith(".md")]
+        file_keys = [obj["Key"] for obj in response["Contents"] if obj["Key"].endswith(file_suffix)]
 
         # 日付でフィルタリング
         filtered_keys = filter_by_date(file_keys, date_from, date_to)
