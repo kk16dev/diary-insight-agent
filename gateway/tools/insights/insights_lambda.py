@@ -80,7 +80,9 @@ def get_file_contents(bucket: str, file_keys: List[str]) -> str:
             contents.append(f"# ファイル: {key}\n\n{content}")
         except Exception as e:
             logger.error(f"Error reading file {key}: {str(e)}")
-            contents.append(f"# ファイル: {key}\n\nエラー: ファイルの読み取りに失敗しました")
+            contents.append(
+                f"# ファイル: {key}\n\nエラー: ファイルの読み取りに失敗しました"
+            )
 
     return "\n\n---\n\n".join(contents)
 
@@ -125,10 +127,13 @@ def handler(event, context):
         elif tool_name == "get_goals":
             file_suffix = "/goals.md"
             content_type = "中長期目標"
+        elif tool_name == "get_references":
+            file_suffix = "/references.md"
+            content_type = "参考情報・知識"
         else:
             logger.error(f"Unexpected tool name: {tool_name}")
             return {
-                "error": f"This Lambda only supports 'get_ideas' and 'get_goals', received: {tool_name}"
+                "error": f"This Lambda only supports 'get_ideas', 'get_goals', and 'get_references', received: {tool_name}"
             }
 
         # 引数を取得
@@ -140,22 +145,44 @@ def handler(event, context):
         response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix="draft/")
 
         if "Contents" not in response:
-            return {"content": [{"type": "text", "text": f"{content_type}ファイルが見つかりませんでした。"}]}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"{content_type}ファイルが見つかりませんでした。",
+                    }
+                ]
+            }
 
-        file_keys = [obj["Key"] for obj in response["Contents"] if obj["Key"].endswith(file_suffix)]
+        file_keys = [
+            obj["Key"]
+            for obj in response["Contents"]
+            if obj["Key"].endswith(file_suffix)
+        ]
 
         # 日付でフィルタリング
         filtered_keys = filter_by_date(file_keys, date_from, date_to)
         logger.info(f"Files after date filter: {len(filtered_keys)}")
 
         if not filtered_keys:
-            return {"content": [{"type": "text", "text": f"指定期間内の{content_type}ファイルが見つかりませんでした。"}]}
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"指定期間内の{content_type}ファイルが見つかりませんでした。",
+                    }
+                ]
+            }
 
         # 全ファイルの内容を取得
         contents = get_file_contents(bucket_name, filtered_keys)
 
         if not contents:
-            return {"content": [{"type": "text", "text": f"{content_type}が見つかりませんでした。"}]}
+            return {
+                "content": [
+                    {"type": "text", "text": f"{content_type}が見つかりませんでした。"}
+                ]
+            }
 
         return {"content": [{"type": "text", "text": contents}]}
 

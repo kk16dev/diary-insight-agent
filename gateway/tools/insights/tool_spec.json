@@ -1,5 +1,23 @@
 [
   {
+    "name": "get_references",
+    "description": "日記から抽出された知識・参考情報を取得する。date_fromとdate_toで期間を絞り込める。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "date_from": {
+          "type": "string",
+          "description": "取得開始日（YYYY-MM-DD形式、省略時は全期間）"
+        },
+        "date_to": {
+          "type": "string",
+          "description": "取得終了日（YYYY-MM-DD形式、省略時は全期間）"
+        }
+      },
+      "required": []
+    }
+  },
+  {
     "name": "get_ideas",
     "description": "日記から抽出されたアイデア・TODOを取得する。date_fromとdate_toで期間を絞り込める。",
     "inputSchema": {

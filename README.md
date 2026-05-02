@@ -246,7 +246,9 @@ diary-insight-agent/
 │   │   └── routes/      # ページ
 │   └── vite.config.ts
 ├── gateway/             # AgentCore Gateway utilities
-├── patterns/            # Agent実装（strands-single-agent）
+│   └── tools/
+│       └── insights/    # References・Ideas・Goals を統合した1つのLambda
+├── patterns/            # Agent実装（strands-single-agent使用中、langgraph未使用）
 ├── tests/               # pytestテスト
 └── docs/                # ドキュメント
 ```

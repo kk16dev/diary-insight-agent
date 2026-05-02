@@ -1,8 +1,8 @@
 import json
 import os
 import traceback
+from datetime import datetime
 
-import boto3
 from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig
 from bedrock_agentcore.memory.integrations.strands.session_manager import (
     AgentCoreMemorySessionManager,
@@ -13,7 +13,6 @@ from strands import Agent
 from strands.models import BedrockModel
 from strands.tools.mcp import MCPClient
 from strands_code_interpreter import StrandsCodeInterpreterTools
-
 from utils.auth import extract_user_id_from_context, get_gateway_access_token
 from utils.ssm import get_ssm_parameter
 
@@ -63,21 +62,23 @@ def create_basic_agent(user_id: str, session_id: str) -> Agent:
     connection, and configures the agent with access to all tools available through
     the Gateway. If Gateway connection fails, it falls back to an agent without tools.
     """
-    system_prompt = """あなたは日記インサイトエージェントです。ユーザーの日記から抽出された知識（references）、アイデア（ideas）、中長期目標（goals）を参照し、ユーザーの振り返りや意思決定を支援します。
+    now = datetime.now()
+    system_prompt = f"""今日の日付は {now.strftime("%Y-%m-%d")}、現在時刻は {now.strftime("%H:%M")} です。
+
+あなたは日記インサイトエージェントです。ユーザーの日記から抽出された知識（references）、アイデア（ideas）、中長期目標（goals）を参照し、ユーザーの振り返りや意思決定を支援します。
 
 ## 利用可能なツール
 
-- **get_references**: 日記から抽出された知識・参考情報を検索します。queryパラメータで内容検索、date_from/date_toで期間絞り込み。
+- **get_references**: 日記から抽出された知識・参考情報を取得します。date_from/date_toで期間絞り込み可能。
 - **get_ideas**: 日記から抽出されたアイデア・TODOを取得します。date_from/date_toで期間絞り込み可能。
 - **get_goals**: 日記から抽出された中長期目標を取得します。date_from/date_toで期間絞り込み可能。
 
 ## 回答方針
 1. ユーザーの質問に応じて、適切なツールを選択して情報を取得してください。
-2. get_referencesは必ずqueryパラメータを指定してください（例: query="AWS AgentCore"）。
-3. 「今月のアイデア」のように期間が示唆される場合は、適切な日付範囲を推定してdate_from/date_toを指定してください。
-4. 取得した情報をわかりやすく整理・要約して回答してください。
-5. 複数の情報源を組み合わせた分析を求められた場合は、複数のツールを呼び出してください。
-6. 日本語で回答してください。"""
+2. 「今月のアイデア」のように期間が示唆される場合は、今日の日付を基準に適切な日付範囲を推定してdate_from/date_toを指定してください。
+3. 取得した情報をわかりやすく整理・要約して回答してください。
+4. 複数の情報源を組み合わせた分析を求められた場合は、複数のツールを呼び出してください。
+5. 日本語で回答してください。"""
 
     bedrock_model = BedrockModel(
         model_id="jp.anthropic.claude-haiku-4-5-20251001-v1:0", temperature=0.1
@@ -97,9 +98,8 @@ def create_basic_agent(user_id: str, session_id: str) -> Agent:
         region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
     )
 
-    # Initialize Code Interpreter tools with boto3 session
+    # Initialize Code Interpreter tools
     region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
-    session = boto3.Session(region_name=region)
     code_tools = StrandsCodeInterpreterTools(region)
 
     try:
@@ -154,7 +154,7 @@ async def agent_stream(payload, context: RequestContext):
     It extracts the user's query from the payload, securely obtains the user ID from
     the validated JWT token in the request context, creates an agent with Gateway tools
     and memory, and streams the response back. This function handles the complete
-    request lifecycle with token-level streaming. The user ID is extracted from the 
+    request lifecycle with token-level streaming. The user ID is extracted from the
     JWT token (via RequestContext).
     """
     user_query = payload.get("prompt")
