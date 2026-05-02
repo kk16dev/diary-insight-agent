@@ -757,10 +757,11 @@ export class BackendStack extends cdk.NestedStack {
     })
 
     // Lambda 1: References tool (LLM-powered search)
-    const referencesLambda = new lambda.Function(this, "ReferencesToolLambda", {
+    const referencesLambda = new PythonFunction(this, "ReferencesToolLambda", {
       runtime: lambda.Runtime.PYTHON_3_13,
-      handler: "references_lambda.handler",
-      code: lambda.Code.fromAsset(path.join(__dirname, "../../gateway/tools/references")),
+      entry: path.join(__dirname, "../../gateway/tools/references"),
+      index: "references_lambda.py",
+      handler: "handler",
       timeout: cdk.Duration.seconds(60), // Longer timeout for Bedrock calls
       environment: {
         S3_BUCKET_NAME: this.insightsBucket.bucketName,
@@ -798,7 +799,8 @@ export class BackendStack extends cdk.NestedStack {
         effect: iam.Effect.ALLOW,
         actions: ["bedrock:InvokeModel"],
         resources: [
-          `arn:aws:bedrock:${this.region}::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0`,
+          `arn:aws:bedrock:*::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0`,
+          `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/jp.anthropic.claude-haiku-4-5-20251001-v1:0`,
         ],
       })
     )

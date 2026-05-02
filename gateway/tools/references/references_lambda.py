@@ -91,8 +91,7 @@ def select_files_with_llm(file_keys: List[str], query: str, max_files: int = 3) 
         "properties": {
             "selected_file_indices": {
                 "type": "array",
-                "items": {"type": "integer", "minimum": 1, "maximum": len(file_keys)},
-                "maxItems": max_files,
+                "items": {"type": "integer"},
                 "description": "選択されたファイルの番号（1ベース）",
             }
         },
@@ -100,21 +99,26 @@ def select_files_with_llm(file_keys: List[str], query: str, max_files: int = 3) 
         "additionalProperties": False,
     }
 
-    # Bedrock Haiku 4.5を呼び出し（Structured Outputs）
-    response = bedrock_client.invoke_model(
+    # Bedrock Haiku 4.5を呼び出し（Structured Outputs、Converse API）
+    response = bedrock_client.converse(
         modelId="jp.anthropic.claude-haiku-4-5-20251001-v1:0",
-        body=json.dumps(
-            {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 200,
-                "messages": [{"role": "user", "content": prompt}],
-                "output_config": {"format": {"type": "json_schema", "schema": json_schema}},
+        messages=[{"role": "user", "content": [{"text": prompt}]}],
+        inferenceConfig={"maxTokens": 200},
+        outputConfig={
+            "textFormat": {
+                "type": "json_schema",
+                "structure": {
+                    "jsonSchema": {
+                        "schema": json.dumps(json_schema),
+                        "name": "file_selection_schema",
+                        "description": "関連ファイルの選択結果スキーマ",
+                    }
+                },
             }
-        ),
+        },
     )
 
-    result = json.loads(response["body"].read())
-    llm_output = result["content"][0]["text"]
+    llm_output = response["output"]["message"]["content"][0]["text"]
 
     logger.info(f"LLM response: {llm_output}")
 
