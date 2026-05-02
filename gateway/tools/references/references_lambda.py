@@ -20,7 +20,7 @@ def filter_by_date(
     日付プレフィックス（YYYY-MM-DD）でS3ファイルキーをフィルタリング
 
     Args:
-        file_keys: S3オブジェクトキーのリスト（例: "references/2026-02-10-aws-agentcore.md"）
+        file_keys: S3オブジェクトキーのリスト（例: "draft/2026-02-10/references.md"）
         date_from: 開始日（YYYY-MM-DD形式、この日を含む）
         date_to: 終了日（YYYY-MM-DD形式、この日を含む）
 
@@ -32,13 +32,16 @@ def filter_by_date(
 
     filtered = []
     for key in file_keys:
-        # ファイル名から日付を抽出: "references/YYYY-MM-DD-topic.md"
-        filename = key.split("/")[-1]
-        if not filename or len(filename) < 10:
+        # パスの2番目のセグメントから日付を抽出: "draft/YYYY-MM-DD/references.md"
+        parts = key.split("/")
+        if len(parts) < 3:
+            continue
+        date_segment = parts[1]
+        if len(date_segment) < 10:
             continue
 
         try:
-            file_date = filename[:10]  # "YYYY-MM-DD"を抽出
+            file_date = date_segment  # "YYYY-MM-DD"を抽出
             datetime.strptime(file_date, "%Y-%m-%d")  # フォーマット検証
 
             # 日付フィルタを適用
@@ -50,7 +53,7 @@ def filter_by_date(
             filtered.append(key)
         except ValueError:
             # 無効な日付形式のファイルはスキップ
-            logger.warning(f"Skipping file with invalid date format: {filename}")
+            logger.warning(f"Skipping file with invalid date format: {key}")
             continue
 
     return filtered
@@ -71,16 +74,16 @@ def select_files_with_llm(file_keys: List[str], query: str, max_files: int = 3) 
     if not file_keys:
         return []
 
-    # LLM用にファイル名を抽出
-    filenames = [key.split("/")[-1] for key in file_keys]
+    # LLM用に日付を抽出（全ファイルが "references.md" という同名のため日付で区別）
+    dates = [key.split("/")[1] for key in file_keys]
 
     # シンプルなプロンプト（構造化出力がスキーマを強制）
     prompt = f"""以下の日記知識ファイルから、ユーザーのクエリに関連するものを最大{max_files}個選択してください。
 
 クエリ: {query}
 
-ファイル一覧:
-{chr(10).join(f"{i+1}. {fn}" for i, fn in enumerate(filenames))}"""
+ファイル一覧（日付形式: YYYY-MM-DD）:
+{chr(10).join(f"{i+1}. {d}" for i, d in enumerate(dates))}"""
 
     # 構造化出力のJSONスキーマ
     json_schema = {
@@ -97,43 +100,36 @@ def select_files_with_llm(file_keys: List[str], query: str, max_files: int = 3) 
         "additionalProperties": False,
     }
 
-    try:
-        # Bedrock Haiku 4.5を呼び出し（構造化出力）
-        response = bedrock_client.invoke_model(
-            modelId="anthropic.claude-haiku-4-5-20251001-v1:0",
-            body=json.dumps(
-                {
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 200,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "output_config": {"format": {"type": "json_schema", "schema": json_schema}},
-                }
-            ),
-        )
+    # Bedrock Haiku 4.5を呼び出し（Structured Outputs）
+    response = bedrock_client.invoke_model(
+        modelId="jp.anthropic.claude-haiku-4-5-20251001-v1:0",
+        body=json.dumps(
+            {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 200,
+                "messages": [{"role": "user", "content": prompt}],
+                "output_config": {"format": {"type": "json_schema", "schema": json_schema}},
+            }
+        ),
+    )
 
-        result = json.loads(response["body"].read())
-        llm_output = result["content"][0]["text"]
+    result = json.loads(response["body"].read())
+    llm_output = result["content"][0]["text"]
 
-        logger.info(f"LLM response: {llm_output}")
+    logger.info(f"LLM response: {llm_output}")
 
-        # LLM出力は確実にスキーマに準拠
-        data = json.loads(llm_output)
-        selected_indices = data["selected_file_indices"]
+    data = json.loads(llm_output)
+    selected_indices = data["selected_file_indices"]
 
-        # 1ベースのインデックスをファイルキーに変換
-        selected_keys = []
-        for idx in selected_indices:
-            if 1 <= idx <= len(file_keys):
-                selected_keys.append(file_keys[idx - 1])
+    # 1ベースのインデックスをファイルキーに変換
+    selected_keys = []
+    for idx in selected_indices:
+        if 1 <= idx <= len(file_keys):
+            selected_keys.append(file_keys[idx - 1])
 
-        logger.info(f"Selected {len(selected_keys)} files from {len(file_keys)} candidates")
+    logger.info(f"Selected {len(selected_keys)} files from {len(file_keys)} candidates")
 
-        return selected_keys[:max_files]
-
-    except Exception as e:
-        logger.error(f"Error calling LLM: {str(e)}")
-        # フォールバック: 最初のN個のファイルを返す
-        return file_keys[:max_files]
+    return selected_keys[:max_files]
 
 
 def get_file_contents(bucket: str, file_keys: List[str]) -> str:
@@ -204,13 +200,13 @@ def handler(event, context):
             date_to = event.get("date_to")
 
             # S3からファイル一覧を取得
-            logger.info(f"Listing files from s3://{bucket_name}/references/")
-            response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix="references/")
+            logger.info(f"Listing files from s3://{bucket_name}/draft/")
+            response = s3_client.list_objects_v2(Bucket=bucket_name, Prefix="draft/")
 
             if "Contents" not in response:
                 return {"content": [{"type": "text", "text": "知識ファイルが見つかりませんでした。"}]}
 
-            file_keys = [obj["Key"] for obj in response["Contents"] if obj["Key"].endswith(".md")]
+            file_keys = [obj["Key"] for obj in response["Contents"] if obj["Key"].endswith("/references.md")]
 
             # 日付でフィルタリング
             filtered_keys = filter_by_date(file_keys, date_from, date_to)
